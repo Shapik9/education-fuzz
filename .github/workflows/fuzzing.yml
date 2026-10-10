@@ -55,9 +55,15 @@ jobs:
         run: |
           docker logs $(docker ps -q) > juice-logs.log
 
+
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: security-reports-bundle
           path: |
             juice-logs.log
+            reports/ffuf-results.json
+            SQL-Injection
+          if-no-files-found: warn
+          retention-days: 7
