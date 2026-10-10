@@ -37,7 +37,19 @@ jobs:
 
       - name: Run fuzzing
         run: |
-          $HOME/go/bin/ffuf || true
+          mkdir -p reports
+
+          $HOME/go/bin/ffuf \
+            -u http://localhost:3000/rest/user/login \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"email":"FUZZ","password":"pass"}' \
+            -w SQL-Injection \
+            -mc all \
+            -t 5 \
+            -rate 10 \
+            -of json \
+            -o reports/ffuf-results.json
 
       - name: Get Logs from Service
         run: |
